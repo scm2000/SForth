@@ -145,6 +145,8 @@ dictElt *dictLookup(char *name)
 
     eltFound = eltFound->prev;
   }
+
+  return 0;
 }
 ////////////////////////////////////////////////////////
 
@@ -452,6 +454,7 @@ void SForthEvaluate(char *str)
             break;
 
           default:
+            DEBUG_PRINT("dict is trashed?");
             myThrow (internalError, "apparently the dictionary is trashed");
             break;
         }
@@ -492,19 +495,20 @@ static void shellHook() {
         }
         break;
 
+      case 0xd:
+        Serial.print("\r\n");
+        *lptr = '\0';
+        SForth.evaluate(lineBuf);
+        lptr = lineBuf;
+        prompted = false;
+        break;
+        
       default:
-        *lptr = c;
-        Serial.print(c);
-        if (*lptr == 0xd)
+        if (c > '\x1f' && c < '\x7f')
         {
-          Serial.print('\n');
-          *lptr = '\0';
-          SForth.evaluate(lineBuf);
-          lptr = lineBuf;
-          prompted = false;
+          *lptr++ = c;
+          Serial.print(c);
         }
-        else
-          ++lptr;
         break;
     }
   }
