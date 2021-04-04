@@ -290,9 +290,16 @@ static void sfFetchFromMem()
 
 static void sfDup()
 {
-  uint32_t *a = dStackPop();
+  uint32_t a = dStackPop();
   dStackPush(a);
   dStackPush(a);
+}
+static void sfSwap()
+{
+  uint32_t a = dStackPop();
+  uint32_t b = dStackPop();
+  dStackPush(a);
+  dStackPush(b);
 }
 
 static void sfVariable()
@@ -308,6 +315,13 @@ static void sfVariable()
     throw (notAWord, "non-existent or numeric token for variable");
   }
 }
+
+static void sfDefineFunction()
+{
+  // grab tokens up to a ; and compile to machine code, woo hoo!
+  
+}
+
 // arduino like builtins
 static void sfPinMode()
 {
@@ -323,6 +337,17 @@ static void sfDigitalWrite()
   uint32_t b = dStackPop();
   digitalWrite(b, a);
 
+}
+
+void toggleTest()
+{
+  sfDup();
+  dStackPush(13);
+  sfSwap();
+  sfDigitalWrite();
+  dStackPush(1);
+  sfSwap();
+  sfSubtract();
 }
 
 ///////////////////SForth entry points
@@ -353,8 +378,10 @@ void SForthBegin(void (*outStrFunc)(char *))
   dictDefine(".s", predefinedFunction, printSignedDecimalValue);
   dictDefine(".x", predefinedFunction, printHexValue);
   dictDefine("dup", predefinedFunction, sfDup);
+  dictDefine("swap", predefinedFunction, sfSwap);
   dictDefine("variable", predefinedFunction, sfVariable);
-
+  dictDefine("toggleTest", predefinedFunction, toggleTest);
+  
   outputString("SForth is up and running!\n");
 #ifdef DEBUG
   // test the stack
@@ -450,3 +477,7 @@ void SForthEvaluate(char *str)
 }
 
 SForth_t SForth = {SForthBegin, SForthEvaluate };
+
+
+
+///////////////// Writing the dictionary and datastack to flash
