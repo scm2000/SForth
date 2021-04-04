@@ -7,9 +7,13 @@ extern "C" {
   struct SForth_t
   {
     // to initialize pass a pointer to a callback to print out a string
-    void (*begin)(void (*outStringFunction)(char*));
+    void (*begin)(void);
 
+    // call this to have SForth interpret SForth code"
     void (*evaluate)(char *str);
+
+    // call this at the top of loop() to allow SForth to provide an interractive shell
+    void (*shellHook)(void);
   };
 
   extern SForth_t SForth;
