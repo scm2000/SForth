@@ -14,6 +14,8 @@ CompilationBuffer compilationBuffer;
 Dictionary dictionary;
 
 /// Data stack
+// for now the data stack has to be c-style to make it easier for
+// compiled code to call dStackPush etc.
 typedef struct dStackBlock dStackBlock;
 #define STACK_BLOCK_SIZE  512
 struct dStackBlock
@@ -178,7 +180,7 @@ static void sfVariable()
   nextToken();
   if (isalpha(curToken[0]))
   {
-    dictionary.define(curToken, Dictionary::variable, 0);
+    dictionary.define(curToken);
   }
   else
   {
@@ -267,7 +269,7 @@ static void sfDefineFunction()
   outputFormat("codeStartStuff: %08x", *((uint32_t*)compilationBuffer.compiledCode));
 #endif
   
-  dictionary.define(name, Dictionary::function, 0, (uint32_t*)compilationBuffer.compiledCode, compilationBuffer.halfWordCount() * 2);
+  dictionary.define(name, (uint32_t*)compilationBuffer.compiledCode, compilationBuffer.halfWordCount() * 2);
 
   compilationBuffer.freeUp();
 
@@ -302,21 +304,21 @@ void SForthBegin()
   }
 
   // initialize the dictionary
-  dictionary.define("+", Dictionary::predefinedFunction, sfAdd);
-  dictionary.define("-", Dictionary::predefinedFunction, sfSubtract);
-  dictionary.define("<<", Dictionary::predefinedFunction, sfLeftShift);
-  dictionary.define(">>", Dictionary::predefinedFunction, sfRightShift);
-  dictionary.define("!", Dictionary::predefinedFunction, sfStoreToMem);
-  dictionary.define("@", Dictionary::predefinedFunction, sfFetchFromMem);
-  dictionary.define("pinMode", Dictionary::predefinedFunction, sfPinMode);
-  dictionary.define("digitalWrite", Dictionary::predefinedFunction, sfDigitalWrite);
-  dictionary.define(".", Dictionary::predefinedFunction, printUnsignedDecimalValue);
-  dictionary.define(".s", Dictionary::predefinedFunction, printSignedDecimalValue);
-  dictionary.define(".x", Dictionary::predefinedFunction, printHexValue);
-  dictionary.define("dup", Dictionary::predefinedFunction, sfDup);
-  dictionary.define("swap", Dictionary::predefinedFunction, sfSwap);
-  dictionary.define("variable", Dictionary::predefinedFunction, sfVariable);
-  dictionary.define(":", Dictionary::predefinedFunction, sfDefineFunction);
+  dictionary.define("+", sfAdd);
+  dictionary.define("-", sfSubtract);
+  dictionary.define("<<", sfLeftShift);
+  dictionary.define(">>", sfRightShift);
+  dictionary.define("!", sfStoreToMem);
+  dictionary.define("@", sfFetchFromMem);
+  dictionary.define("pinMode", sfPinMode);
+  dictionary.define("digitalWrite", sfDigitalWrite);
+  dictionary.define(".", printUnsignedDecimalValue);
+  dictionary.define(".s", printSignedDecimalValue);
+  dictionary.define(".x", printHexValue);
+  dictionary.define("dup", sfDup);
+  dictionary.define("swap", sfSwap);
+  dictionary.define("variable", sfVariable);
+  dictionary.define(":", sfDefineFunction);
 
   outputFormat("SForth is up and running!%s", eol);
 #ifdef DEBUG

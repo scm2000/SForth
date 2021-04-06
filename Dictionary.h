@@ -2,69 +2,45 @@
 class Dictionary
 {
   public:
-    Dictionary() :dictHead(0) {}
-    
+    Dictionary() : dictHead(0) {}
+
     /* Dictionary element types */
-    typedef enum {variable, function, predefinedFunction} dictEltType;
+    typedef enum {variable, function, predefinedFunction, compilingFunction} dictEltType;
 
     /* A dictionary element */
-    // better make this an even number
+    // make this so that val starts on an even address
+    // assumping type starts on an evenAddress
     struct dictElt {
-      uint8_t type;
+      dictEltType type;
       char name[MAX_TOKEN_LEN + 1];
       dictElt *prev;
       uint32_t val;
+      void (*compFunc)(void); // for compilationFunctions
     };
 
 
-    void define(char *name, dictEltType type, void (*funcPtr)(void) = 0, uint32_t *code = 0, int len = 0)
+    // define a variable
+    void define(char *name)
     {
-      DEBUG_PRINT("dictDefine called");
+      DEBUG_PRINT("defining a variable");
+      prependNew(name, variable, sizeof(dictElt) - sizeof(dictElt::compFunc))->val = 0;
+    }
 
-      dictElt *newElt;
-      switch (type)
-      {
-        case variable:
-          {
-            DEBUG_PRINT("defining a variable");
-            newElt = (dictElt*)mallocMem(sizeof(dictElt));
-            newElt->val = 0;
-          }
-          break;
+    void define(char *name, void (*funcPtr)(void))
+    {
+      DEBUG_PRINT("defining a predefined function");
+      prependNew(name, predefinedFunction,
+                 sizeof(dictElt) - sizeof(dictElt::compFunc))->val = (uint32_t)funcPtr;
+    }
 
-        case predefinedFunction:
-          {
-            DEBUG_PRINT("defining a predefined function");
-            newElt = (dictElt*)mallocMem(sizeof(dictElt));
-            newElt->val = (uint32_t)funcPtr;
-          }
-          break;
-        case function:
-          {
-            DEBUG_PRINT("defining user defined function");
-            newElt = (dictElt*)mallocMem(sizeof(dictElt) + len - sizeof(uint32_t));
-#ifdef DEBUG
-            outputFormat("funcStart: %08x%s", &newElt->val, eol);
-#endif
-            //copy code over
-            memcpy(&newElt->val, code, len);
-
-#ifdef DEBUG
-            outputFormat("stored code: %08x%s",  newElt->val, eol);
-#endif
-          }
-          break;
-        default:
-          {
-            DEBUG_PRINT("about to throw on default type");
-            myThrow (invalidDictEltType, "in dictDefine");
-          }
-      }
-
-      strncpy(newElt->name, name, MAX_TOKEN_LEN);
-      newElt->prev = dictHead;
-      newElt->type = type;
-      dictHead = newElt;
+    void define(char *name, uint32_t *code, size_t len)
+    {
+      DEBUG_PRINT("defining a user defined function");
+      dictElt *newElt =
+        prependNew(name, function,
+                   sizeof(dictElt) - sizeof(dictElt::val) - sizeof(dictElt::compFunc));
+      //copy code over
+      memcpy(&newElt->val, code, len);
     }
 
     dictElt *lookup(char *name)
@@ -86,5 +62,17 @@ class Dictionary
 
   private:
     dictElt *dictHead;
+
+    dictElt *prependNew(char *name, dictEltType type, size_t eltSize)
+    {
+      DEBUG_PRINT("prepending new elt")
+      dictElt *newElt = (dictElt*)mallocMem(eltSize);
+      strncpy(newElt->name, name, MAX_TOKEN_LEN);
+      newElt->prev = dictHead;
+      newElt->type = type;
+      dictHead = newElt;
+      DEBUG_PRINT("done prepending");
+      return newElt;
+    }
 
 };
