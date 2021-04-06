@@ -8,92 +8,10 @@
 #include "SForth.h"
 #include "utils.h"
 #include "CompilationBuffer.h"
+#include "Dictionary.h"
 
 CompilationBuffer compilationBuffer;
-
-/* Dictionary element types */
-typedef enum {variable, function, predefinedFunction} dictEltType;
-
-/* A dictionary element */
-// better make this an even number
-#define MAX_TOKEN_LEN 32
-typedef struct dictElt dictElt;
-typedef struct dictElt {
-  uint8_t type;
-  char name[MAX_TOKEN_LEN + 1];
-  dictElt *prev;
-  uint32_t val;
-};
-
-static dictElt *dictHead = 0;
-
-static void dictDefine(char *name, dictEltType type, void (*funcPtr)(void) = 0, uint32_t *code = 0, int len = 0)
-{
-  DEBUG_PRINT("dictDefine called");
-
-  dictElt *newElt;
-  switch (type)
-  {
-    case variable:
-      {
-        DEBUG_PRINT("defining a variable");
-        newElt = (dictElt*)mallocMem(sizeof(dictElt));
-        newElt->val = 0;
-      }
-      break;
-
-    case predefinedFunction:
-      {
-        DEBUG_PRINT("defining a predefined function");
-        newElt = (dictElt*)mallocMem(sizeof(dictElt));
-        newElt->val = (uint32_t)funcPtr;
-      }
-      break;
-    case function:
-      {
-        DEBUG_PRINT("defining user defined function");
-        newElt = (dictElt*)mallocMem(sizeof(dictElt) + len - sizeof(uint32_t));
-#ifdef DEBUG
-        outputFormat("funcStart: %08x%s", &newElt->val, eol);
-#endif
-        //copy code over
-        memcpy(&newElt->val, code, len);
-
-#ifdef DEBUG
-        outputFormat("stored code: %08x%s",  newElt->val, eol);
-#endif
-      }
-      break;
-    default:
-      {
-        DEBUG_PRINT("about to throw on default type");
-        myThrow (invalidDictEltType, "in dictDefine");
-      }
-  }
-
-  strncpy(newElt->name, name, MAX_TOKEN_LEN);
-  newElt->prev = dictHead;
-  newElt->type = type;
-  dictHead = newElt;
-}
-
-dictElt *dictLookup(char *name)
-{
-  dictElt *eltFound = dictHead;
-
-  while (eltFound)
-  {
-    if (strncmp(eltFound->name, name, 32) == 0)
-    {
-      return eltFound;
-    }
-
-    eltFound = eltFound->prev;
-  }
-
-  return 0;
-}
-////////////////////////////////////////////////////////
+Dictionary dictionary;
 
 /// Data stack
 typedef struct dStackBlock dStackBlock;
@@ -260,7 +178,7 @@ static void sfVariable()
   nextToken();
   if (isalpha(curToken[0]))
   {
-    dictDefine(curToken, variable, 0);
+    dictionary.define(curToken, Dictionary::variable, 0);
   }
   else
   {
@@ -297,13 +215,13 @@ static void sfDefineFunction()
     else // assume a word
     {
       // find it in the dictionary
-      dictElt *entry = dictLookup(curToken);
+      Dictionary::dictElt *entry = dictionary.lookup(curToken);
       if (entry)
       {
         // found in dict
-        switch ((dictEltType)entry->type)
+        switch (entry->type)
         {
-          case variable:
+          case Dictionary::variable:
             {
               DEBUG_PRINT("token is a variable reference");
               uint32_t valAddr = (uint32_t)&entry->val;
@@ -311,7 +229,7 @@ static void sfDefineFunction()
             }
             break;
 
-          case function:
+          case Dictionary::function:
             {
               DEBUG_PRINT("token is a function reference");
               uint32_t offsetStart = ((uint32_t)&entry->val) | 0x1;
@@ -319,7 +237,7 @@ static void sfDefineFunction()
             }
             break;
 
-          case predefinedFunction:
+          case Dictionary::predefinedFunction:
             {
               DEBUG_PRINT("token is a predefined function reference");
               compilationBuffer.insertCallToVoid(entry->val);
@@ -349,7 +267,7 @@ static void sfDefineFunction()
   outputFormat("codeStartStuff: %08x", *((uint32_t*)compilationBuffer.compiledCode));
 #endif
   
-  dictDefine(name, function, 0, (uint32_t*)compilationBuffer.compiledCode, compilationBuffer.halfWordCount() * 2);
+  dictionary.define(name, Dictionary::function, 0, (uint32_t*)compilationBuffer.compiledCode, compilationBuffer.halfWordCount() * 2);
 
   compilationBuffer.freeUp();
 
@@ -371,15 +289,6 @@ static void sfDigitalWrite()
   digitalWrite(b, a);
 
 }
-// 01 e0                          b #2 <$t+0x4>  branches over 4 bytes
-//4f f0 11 30                    mov.w r0, #286331153    loads a constant into register 0
-volatile int a;
-static void sampleOp()
-{
-  ((void (*)(uint32_t))0xdeadbeef)(0x12345678);
-  dStackPop();
-  dStackPop();
-}
 
 ///////////////////SForth entry points
 void SForthBegin()
@@ -393,24 +302,21 @@ void SForthBegin()
   }
 
   // initialize the dictionary
-  dictDefine("+", predefinedFunction, sfAdd);
-  DEBUG_PRINT("defined plus");
-
-  dictDefine("-", predefinedFunction, sfSubtract);
-  dictDefine("<<", predefinedFunction, sfLeftShift);
-  dictDefine(">>", predefinedFunction, sfRightShift);
-  dictDefine("!", predefinedFunction, sfStoreToMem);
-  dictDefine("@", predefinedFunction, sfFetchFromMem);
-  dictDefine("pinMode", predefinedFunction, sfPinMode);
-  dictDefine("digitalWrite", predefinedFunction, sfDigitalWrite);
-  dictDefine(".", predefinedFunction, printUnsignedDecimalValue);
-  dictDefine(".s", predefinedFunction, printSignedDecimalValue);
-  dictDefine(".x", predefinedFunction, printHexValue);
-  dictDefine("dup", predefinedFunction, sfDup);
-  dictDefine("swap", predefinedFunction, sfSwap);
-  dictDefine("variable", predefinedFunction, sfVariable);
-  dictDefine(":", predefinedFunction, sfDefineFunction);
-  dictDefine("so", predefinedFunction, sampleOp);
+  dictionary.define("+", Dictionary::predefinedFunction, sfAdd);
+  dictionary.define("-", Dictionary::predefinedFunction, sfSubtract);
+  dictionary.define("<<", Dictionary::predefinedFunction, sfLeftShift);
+  dictionary.define(">>", Dictionary::predefinedFunction, sfRightShift);
+  dictionary.define("!", Dictionary::predefinedFunction, sfStoreToMem);
+  dictionary.define("@", Dictionary::predefinedFunction, sfFetchFromMem);
+  dictionary.define("pinMode", Dictionary::predefinedFunction, sfPinMode);
+  dictionary.define("digitalWrite", Dictionary::predefinedFunction, sfDigitalWrite);
+  dictionary.define(".", Dictionary::predefinedFunction, printUnsignedDecimalValue);
+  dictionary.define(".s", Dictionary::predefinedFunction, printSignedDecimalValue);
+  dictionary.define(".x", Dictionary::predefinedFunction, printHexValue);
+  dictionary.define("dup", Dictionary::predefinedFunction, sfDup);
+  dictionary.define("swap", Dictionary::predefinedFunction, sfSwap);
+  dictionary.define("variable", Dictionary::predefinedFunction, sfVariable);
+  dictionary.define(":", Dictionary::predefinedFunction, sfDefineFunction);
 
   outputFormat("SForth is up and running!%s", eol);
 #ifdef DEBUG
@@ -470,19 +376,19 @@ void SForthEvaluate(char *str)
 
       // assume it is a word
       // find it in the dictionary
-      dictElt *entry = dictLookup(curToken);
+      Dictionary::dictElt *entry = dictionary.lookup(curToken);
       if (entry)
       {
         // found in dict
-        switch ((dictEltType)entry->type)
+        switch (entry->type)
         {
-          case variable:
+          case Dictionary::variable:
             DEBUG_PRINT("token is a variable reference");
             // push the address of the variable's numVal;
             dStackPush((uint32_t)&entry->val);
             break;
 
-          case function:
+          case Dictionary::function:
             {
               DEBUG_PRINT("token is a function reference");
               // wow.. call the function code packed in the dictElt
@@ -502,7 +408,7 @@ void SForthEvaluate(char *str)
             }
             break;
 
-          case predefinedFunction:
+          case Dictionary::predefinedFunction:
             DEBUG_PRINT("token is a predefined function reference");
             // call through the function pointer
             ((void (*)(void))entry->val)();
