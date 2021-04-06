@@ -3,76 +3,13 @@
 #include <setjmp.h>
 #include <Arduino.h>
 
-const char *eol = "\r\n";
+//#define DEBUG
 
 #include "SForth.h"
-static void outputFormat(char *fmt, ...)
-{
-  char tmpStr[1000];
-  va_list valist;
-  va_start(valist, fmt);
-  vsnprintf(tmpStr, sizeof(tmpStr), fmt, valist);
-  va_end(valist);
-  Serial.print(tmpStr);
-}
+#include "utils.h"
+#include "CompilationBuffer.h"
 
-//#define DEBUG
-#ifdef DEBUG
-#define DEBUG_PRINT(string) outputFormat("SForth DEBUG: %s%s", string,eol);
-#else
-#define DEBUG_PRINT(string)
-#endif
-
-static jmp_buf errorJump;
-static char *errorMessage = 0;
-
-typedef enum {noError = 0, invalidDictEltType, cantMalloc, dStackUnderflow, internalError, undefinedWord, notAWord} errorCode;
-void myThrow (errorCode code, char *message)
-{
-  errorMessage = message;
-  longjmp(errorJump, code);
-}
-
-static void printError(errorCode code)
-{
-  char *codeWord = "unknown error";
-  switch (code)
-  {
-    case invalidDictEltType:
-      codeWord = "internal error invalid dictionary element type";
-      break;
-    case cantMalloc:
-      codeWord = "out of malloc memory";
-      break;
-    case dStackUnderflow:
-      codeWord = "dataStackUnderflow";
-      break;
-    case internalError:
-      codeWord = "internalError";
-      break;
-    case undefinedWord:
-      codeWord = "undefined word";
-      break;
-    case notAWord:
-      codeWord = "not a word";
-      break;
-    default:
-      codeWord = "unexpected error code";
-      break;
-  }
-  outputFormat("Error: %s, %s%s", codeWord, errorMessage, eol);
-}
-
-/* malloc stuff */
-void *mallocMem(size_t len)
-{
-  void *res = malloc(len);
-  if (res == 0)
-  {
-    longjmp(errorJump, cantMalloc);
-  }
-  return res;
-}
+CompilationBuffer compilationBuffer;
 
 /* Dictionary element types */
 typedef enum {variable, function, predefinedFunction} dictEltType;
@@ -331,85 +268,15 @@ static void sfVariable()
   }
 }
 
-// this code is just to get things going.. needs future optimizations
-// A function to pass a 32 bit number to dStackPush
-// the code snip will look like:
-// 4802     load r0 with number 8 bytes away
-// 4b02     load r3 with address 8 bytes away
-// 4798     branch link through r3
-// bf00     nop (because data has to be a multiple of 4 away)
-// e002     branch over next 8 bytes
-// xxxx low 16 bits of value
-// yyyy hight 16 bits of value
-// wwww low 16 bits of dStackPush address
-// zzzz high 16 bits of dStackPush address
-// nop for allignment of next instruction.
-const size_t insertDStackPushHWCount = 10; // be good about keeping this correct
-static void insertDStackPush(uint16_t *&codePtr, uint32_t val)
-{
-  uint32_t callLoc = (uint32_t)&dStackPush;
-  *codePtr++ = 0x4802;
-  *codePtr++ = 0x4b02;
-  *codePtr++ = 0x4798;
-  *codePtr++ = 0xbf00;
-  *codePtr++ = 0xe002;
-  *codePtr++ = (val) & 0xffff;
-  *codePtr++ = (val) >> 16;
-  *codePtr++ = callLoc & 0xffff;
-  *codePtr++ = callLoc >> 16;
-  *codePtr++ = 0xbf00;
-}
-
-// A function to call a function or predefined
-// the code snip will look like:
-// 4b01     load r3 with address 4 bytes away
-// 4798     branch link through r3
-// e001     branch over next 4 bytes
-// wwww low 16 bits of dStackPush address
-// zzzz high 16 bits of dStackPush address
-// nop for allignment of next instruction.
-const size_t insertCallToAddrHWCount = 6;
-static void insertCallToAddr(uint16_t *&codePtr, uint32_t addr)
-{
-  uint32_t callLoc = (uint32_t)&dStackPush;
-  *codePtr++ = 0x4b01;
-  *codePtr++ = 0x4798;
-  *codePtr++ = 0xe001;
-  *codePtr++ = (addr) & 0xffff;
-  *codePtr++ = (addr) >> 16;
-  *codePtr++ = 0xbf00;
-}
 
 static uint32_t tokenToNumber();
-static void reserveHalfWords(uint16_t *&codeStart, uint16_t *&codePtr, size_t &totalAvailHW, size_t HWPerChunk, size_t halfWordsNeeded)
-{
-  if ((codePtr + halfWordsNeeded) - codeStart > totalAvailHW)
-  {
-    totalAvailHW += HWPerChunk;
-    size_t offsetSave = codePtr - codeStart;
-    codeStart = (uint16_t*)reallocf(codeStart, totalAvailHW * sizeof(uint16_t));
-    if (!codeStart)
-    {
-      myThrow(cantMalloc, "out of memory allocating temp code space");
-    }
-    codePtr = codeStart + offsetSave;
-  }
-}
+
 static void sfDefineFunction()
 {
   // grab tokens up to a ; and compile to machine code, woo hoo!
-  // uses a temp buffer to build the function, then copies into
-  // the dictionary.  Allocate chunks of bytes at a time, may realloc
-  size_t HWPerChunk = 512;
-  size_t totalAvailHW = HWPerChunk;
-  uint16_t *codeStart = (uint16_t*)realloc(0, totalAvailHW * sizeof(uint16_t));
-  if (!codeStart)
-    myThrow(cantMalloc, "out of memory allocating temp code space");
-
-  uint16_t *codePtr = codeStart;
 
   // function prolog is to push {r3, lr}
-  *codePtr++ = 0xb508;
+  compilationBuffer.beginFunction();
 
   nextToken(); // better be the word we are defining
   if (!isalpha(curToken[0]))
@@ -424,10 +291,8 @@ static void sfDefineFunction()
   {
     if (isdigit(curToken[0]))
     {
-      reserveHalfWords(codeStart, codePtr, totalAvailHW, HWPerChunk, insertDStackPushHWCount);
-
       uint32_t num = tokenToNumber();
-      insertDStackPush(codePtr, num);
+      compilationBuffer.insertCallToVoidWithArg((uint32_t)&dStackPush, num);
     }
     else // assume a word
     {
@@ -441,32 +306,23 @@ static void sfDefineFunction()
           case variable:
             {
               DEBUG_PRINT("token is a variable reference");
-
-              reserveHalfWords(codeStart, codePtr, totalAvailHW, HWPerChunk, insertDStackPushHWCount);
-
               uint32_t valAddr = (uint32_t)&entry->val;
-              insertDStackPush(codePtr, valAddr);
+              compilationBuffer.insertCallToVoidWithArg((uint32_t)&dStackPush, valAddr);
             }
             break;
 
           case function:
             {
               DEBUG_PRINT("token is a function reference");
-
-              reserveHalfWords(codeStart, codePtr, totalAvailHW, HWPerChunk, insertCallToAddrHWCount);
-
               uint32_t offsetStart = ((uint32_t)&entry->val) | 0x1;
-              insertCallToAddr(codePtr, offsetStart);
+              compilationBuffer.insertCallToVoid(offsetStart);
             }
             break;
 
           case predefinedFunction:
             {
               DEBUG_PRINT("token is a predefined function reference");
-
-              reserveHalfWords(codeStart, codePtr, totalAvailHW, HWPerChunk, insertCallToAddrHWCount);
-
-              insertCallToAddr(codePtr, entry->val);
+              compilationBuffer.insertCallToVoid(entry->val);
             }
             break;
 
@@ -487,15 +343,15 @@ static void sfDefineFunction()
   }
 
   // now the prolog for the function.
-  // for now we pop return.. (We could have just jumped to last function call.. todo)
-  *codePtr++ = 0xbd08;  // this is pop {r3, pc}
-  *codePtr++ = 0xbf00;  // this is nop
+  compilationBuffer.endFunction();
+  
 #ifdef DEBUG
-  outputFormat("codeStartStuff: %08x", *((uint32_t*)codeStart));
+  outputFormat("codeStartStuff: %08x", *((uint32_t*)compilationBuffer.compiledCode));
 #endif
-  dictDefine(name, function, 0, (uint32_t*)codeStart, (codePtr - codeStart) * 2);
+  
+  dictDefine(name, function, 0, (uint32_t*)compilationBuffer.compiledCode, compilationBuffer.halfWordCount() * 2);
 
-  free(codeStart);
+  compilationBuffer.freeUp();
 
 }
 
